@@ -8,6 +8,23 @@ from datetime import datetime, timedelta, timezone
 import re
 import hashlib
 import sqlite3
+from flask import Flask
+import threading
+
+
+scraper_app = Flask(__name__)
+
+@scraper_app.route('/health', methods=['GET'])
+def health():
+    return {"status": "healthy", "service": "auction-scraper"}, 200
+
+@scraper_app.route('/', methods=['GET'])
+def root():
+    return {"service": "Yahoo Auction Scraper", "status": "running"}, 200
+
+def run_health_server():
+    port = int(os.environ.get('PORT', 8000))
+    scraper_app.run(host='0.0.0.0', port=port, debug=False)
 
 # At the top of the file, replace the hardcoded URLs with:
 DISCORD_BOT_WEBHOOK = os.getenv('DISCORD_BOT_WEBHOOK', "http://localhost:8000/webhook")
@@ -628,7 +645,7 @@ def get_discord_bot_stats():
 def main_loop():
     print("🎯 Starting Enhanced Yahoo Japan Sniper...")
     
-    # Start health server for Railway health checks
+  # Start health server for Railway
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     print(f"🌐 Health server started on port {os.environ.get('PORT', 8000)}")
