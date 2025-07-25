@@ -1558,32 +1558,46 @@ async def on_ready():
 
 @bot.event
 async def on_reaction_add(reaction, user):
-    print(f"🔍 REACTION DEBUG: Reaction detected from {user.name} ({user.id})")
-    print(f"🔍 REACTION DEBUG: Emoji: {reaction.emoji}")
-    print(f"🔍 REACTION DEBUG: Channel: {reaction.message.channel.name}")
-    print(f"🔍 REACTION DEBUG: Is bot: {user.bot}")
-    
     if user.bot:
-        print("🚫 REACTION DEBUG: Ignoring bot reaction")
         return
     
+    # Handle setup reactions
     if reaction.message.embeds and len(reaction.message.embeds) > 0:
         embed = reaction.message.embeds[0]
         if embed.title and "Setup" in embed.title:
-            print("🔍 REACTION DEBUG: Setup reaction detected")
             await handle_setup_reaction(reaction, user)
             return
     
-    print(f"🔍 REACTION DEBUG: Emoji check - is thumbs: {str(reaction.emoji) in ['👍', '👎']}")
+    # Handle bookmark removal in bookmark channels
+    if (str(reaction.emoji) == "🗑️" and 
+        reaction.message.channel.name and 
+        reaction.message.channel.name.endswith("-bookmarks")):
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM user_bookmarks WHERE user_id = ? AND bookmark_message_id = ?',
+                          (user.id, reaction.message.id))
+            
+            if cursor.rowcount > 0:
+                await reaction.message.delete()
+                conn.commit()
+                print(f"🗑️ Removed bookmark for {user.name}")
+            
+            conn.close()
+            return
+            
+        except Exception as e:
+            print(f"❌ Error removing bookmark: {e}")
+            return
+    
+    # Only process thumbs up/down for auction listings
     if str(reaction.emoji) not in ["👍", "👎"]:
-        print("🚫 REACTION DEBUG: Not a thumbs up/down emoji")
         return
     
+    # Check if user has completed setup
     proxy_service, setup_complete = get_user_proxy_preference(user.id)
-    print(f"🔍 REACTION DEBUG: User setup complete: {setup_complete}")
-    
     if not setup_complete:
-        print("🚫 REACTION DEBUG: User hasn't completed setup")
         embed = discord.Embed(
             title="⚠️ Setup Required",
             description="Please complete your setup first using `!setup`!",
@@ -1593,105 +1607,101 @@ async def on_reaction_add(reaction, user):
         await dm_channel.send(embed=embed)
         return
     
-    channel_name = reaction.message.channel.name
-    print(f"🔍 REACTION DEBUG: Channel name: '{channel_name}'")
-    print(f"🔍 REACTION DEBUG: Channel check: {channel_name == '🎯-auction-alerts' or channel_name.startswith('🏷️-')}")
-    
-    if not (channel_name == "🎯-auction-alerts" or channel_name.startswith("🏷️-")):
-        print(f"🚫 REACTION DEBUG: Wrong channel - expected '🎯-auction-alerts' or starting with '🏷️-'")
-        return
-    
-    print(f"🔍 REACTION DEBUG: Message has embeds: {bool(reaction.message.embeds)}")
+    # Check if message has embeds
     if not reaction.message.embeds:
-        print("🚫 REACTION DEBUG: No embeds in message")
         return
     
+    # Extract auction ID from footer
     embed = reaction.message.embeds[0]
     footer_text = embed.footer.text if embed.footer else ""
-    print(f"🔍 REACTION DEBUG: Footer text: '{footer_text}'")
     
     auction_id_match = re.search(r'ID: (\w+)', footer_text)
-    print(f"🔍 REACTION DEBUG: Auction ID match: {auction_id_match}")
-    
     if not auction_id_match:
-        print("🚫 REACTION DEBUG: No auction ID found in footer")
         return
     
     auction_id = auction_id_match.group(1)
     reaction_type = "thumbs_up" if str(reaction.emoji) == "👍" else "thumbs_down"
     
-    print(f"✅ REACTION DEBUG: Processing {reaction_type} from {user.name} on auction {auction_id}")
+    print(f"👆 Processing {reaction_type} for auction {auction_id} from {user.name}")
     
-    # Test database connection
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        print("✅ REACTION DEBUG: Database connection successful")
-        
-        # Check if listings table exists and has the auction
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='listings'")
-        listings_exists = cursor.fetchone() is not None
-        print(f"🔍 REACTION DEBUG: Listings table exists: {listings_exists}")
-        
-        cursor.execute('SELECT COUNT(*) FROM listings WHERE auction_id = ?', (auction_id,))
-        listing_count = cursor.fetchone()[0]
-        print(f"🔍 REACTION DEBUG: Listings found for auction {auction_id}: {listing_count}")
-        
+    # Find the listing in database
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM listings WHERE auction_id = ?', (auction_id,))
+    result = cursor.fetchone()
+    
+    if not result:
+        # Try with yahoo_ prefix
+        cursor.execute('SELECT * FROM listings WHERE auction_id = ?', (f"yahoo_{auction_id}",))
+        result = cursor.fetchone()
+        if result:
+            auction_id = f"yahoo_{auction_id}"
+    
+    if result:
+        # Get listing details
         cursor.execute('''
-            SELECT title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality
+            SELECT title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality, zenmarket_url, image_url
             FROM listings WHERE auction_id = ?
         ''', (auction_id,))
-        result = cursor.fetchone()
+        listing_result = cursor.fetchone()
         
-        if result:
-            title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality = result
-            print(f"✅ REACTION DEBUG: Found listing: {title[:30]}...")
+        if listing_result:
+            title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality, zenmarket_url, image_url = listing_result
             
-            auction_data = {
-                'auction_id': auction_id,
-                'title': title,
-                'brand': brand,
-                'price_jpy': price_jpy,
-                'price_usd': price_usd,
-                'seller_id': seller_id,
-                'deal_quality': deal_quality
-            }
-            
-            # Test preference learner
-            if preference_learner:
-                print("✅ REACTION DEBUG: Preference learner exists, calling learn_from_reaction")
-                preference_learner.learn_from_reaction(user.id, auction_data, reaction_type)
-            else:
-                print("❌ REACTION DEBUG: No preference learner found")
-            
-            # Test add_reaction function
-            print("🔍 REACTION DEBUG: Calling add_reaction function")
+            # Save the reaction
             success = add_reaction(user.id, auction_id, reaction_type)
-            print(f"🔍 REACTION DEBUG: add_reaction returned: {success}")
             
             if success:
+                # Add confirmation emoji
                 if reaction_type == "thumbs_up":
                     await reaction.message.add_reaction("✅")
+                    
+                    # Create bookmark for liked item
+                    auction_data = {
+                        'auction_id': auction_id,
+                        'title': title,
+                        'brand': brand,
+                        'price_jpy': price_jpy,
+                        'price_usd': price_usd,
+                        'seller_id': seller_id,
+                        'deal_quality': deal_quality,
+                        'zenmarket_url': zenmarket_url,
+                        'image_url': image_url,
+                        'priority': 50  # Default priority
+                    }
+                    
+                    # Save bookmark
+                    await save_bookmark_to_user(user, auction_data)
+                    
                 else:
                     await reaction.message.add_reaction("❌")
                 
-                print(f"✅ REACTION DEBUG: Successfully processed {reaction_type} from {user.name}")
+                print(f"✅ Processed {reaction_type} from {user.name}: {title[:30]}...")
                 
-                # Verify the reaction was saved
-                cursor.execute('SELECT COUNT(*) FROM reactions WHERE user_id = ? AND auction_id = ?', (user.id, auction_id))
-                saved_count = cursor.fetchone()[0]
-                print(f"🔍 REACTION DEBUG: Reactions in DB for this user/auction: {saved_count}")
-                
+                # Update preference learner
+                if preference_learner:
+                    try:
+                        auction_data_for_learner = {
+                            'auction_id': auction_id,
+                            'title': title,
+                            'brand': brand,
+                            'price_jpy': price_jpy,
+                            'price_usd': price_usd,
+                            'seller_id': seller_id,
+                            'deal_quality': deal_quality
+                        }
+                        preference_learner.learn_from_reaction(user.id, auction_data_for_learner, reaction_type)
+                    except Exception as e:
+                        print(f"⚠️ Preference learner error: {e}")
             else:
-                print(f"❌ REACTION DEBUG: Failed to save reaction")
+                print(f"❌ Failed to save reaction from {user.name}")
         else:
-            print(f"❌ REACTION DEBUG: No listing found for auction ID: {auction_id}")
-            # Let's see what auction IDs we do have
-            cursor.execute('SELECT auction_id FROM listings LIMIT 5')
-            sample_ids = cursor.fetchall()
-            print(f"🔍 REACTION DEBUG: Sample auction IDs in DB: {[row[0] for row in sample_ids]}")
-        
-        conn.close()
+            print(f"❌ Could not get listing details for {auction_id}")
+    else:
+        print(f"❌ No listing found for auction ID: {auction_id}")
+    
+    conn.close()
         
     except Exception as e:
         print(f"❌ REACTION DEBUG: Database error: {e}")
@@ -1864,6 +1874,117 @@ async def setup_command(ctx):
     
     for proxy in SUPPORTED_PROXIES.values():
         await message.add_reaction(proxy['emoji'])
+
+@bot.command(name='bookmark_method')
+async def bookmark_method_command(ctx, method: str):
+    """Change bookmark method: dm or channel"""
+    if method.lower() not in ['dm', 'channel']:
+        await ctx.send("❌ Method must be `dm` or `channel`")
+        return
+    
+    bookmark_method = "dm" if method.lower() == "dm" else "private_channel"
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE user_preferences 
+        SET bookmark_method = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    ''', (bookmark_method, ctx.author.id))
+    
+    if cursor.rowcount == 0:
+        # User doesn't exist in preferences, create them
+        cursor.execute('''
+            INSERT INTO user_preferences 
+            (user_id, bookmark_method, proxy_service, setup_complete)
+            VALUES (?, ?, 'zenmarket', TRUE)
+        ''', (ctx.author.id, bookmark_method))
+    
+    conn.commit()
+    conn.close()
+    
+    method_name = "Direct Messages" if bookmark_method == "dm" else "Private Channel"
+    await ctx.send(f"✅ Bookmark method changed to **{method_name}**")
+
+@bot.command(name='bookmark_toggle')
+async def bookmark_toggle_command(ctx):
+    """Toggle auto-bookmarking of liked items"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT auto_bookmark_likes FROM user_preferences WHERE user_id = ?', (ctx.author.id,))
+    current = cursor.fetchone()
+    current_value = current[0] if current and current[0] is not None else True
+    
+    new_value = not current_value
+    
+    cursor.execute('''
+        UPDATE user_preferences 
+        SET auto_bookmark_likes = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?
+    ''', (new_value, ctx.author.id))
+    
+    conn.commit()
+    conn.close()
+    
+    status = "enabled" if new_value else "disabled"
+    await ctx.send(f"✅ Auto-bookmarking **{status}**")
+
+@bot.command(name='bookmarks')
+async def bookmarks_command(ctx, page: int = 1):
+    """View your bookmarked items"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Get total count
+    cursor.execute('SELECT COUNT(*) FROM user_bookmarks WHERE user_id = ?', (ctx.author.id,))
+    total = cursor.fetchone()[0]
+    
+    if total == 0:
+        embed = discord.Embed(
+            title="📚 Your Bookmarks",
+            description="You haven't bookmarked any items yet! React with 👍 to auction listings to bookmark them.",
+            color=0xff9900
+        )
+        await ctx.send(embed=embed)
+        conn.close()
+        return
+    
+    # Pagination
+    items_per_page = 5
+    offset = (page - 1) * items_per_page
+    total_pages = (total + items_per_page - 1) // items_per_page
+    
+    cursor.execute('''
+        SELECT l.title, l.brand, l.price_usd, l.zenmarket_url, ub.created_at
+        FROM user_bookmarks ub
+        JOIN listings l ON ub.auction_id = l.auction_id
+        WHERE ub.user_id = ?
+        ORDER BY ub.created_at DESC
+        LIMIT ? OFFSET ?
+    ''', (ctx.author.id, items_per_page, offset))
+    
+    bookmarks = cursor.fetchall()
+    
+    embed = discord.Embed(
+        title=f"📚 Your Bookmarks (Page {page}/{total_pages})",
+        description=f"Showing {len(bookmarks)} of {total} bookmarked items",
+        color=0x0099ff
+    )
+    
+    for i, (title, brand, price_usd, url, created_at) in enumerate(bookmarks, 1):
+        embed.add_field(
+            name=f"{i + offset}. {brand.replace('_', ' ').title()}",
+            value=f"[{title[:60]}{'...' if len(title) > 60 else ''}]({url})\n💰 ${price_usd:.2f} | 📅 {created_at[:10]}",
+            inline=False
+        )
+    
+    if total_pages > 1:
+        embed.set_footer(text=f"Use !bookmarks {page + 1} for next page" if page < total_pages else "End of bookmarks")
+    
+    conn.close()
+    await ctx.send(embed=embed)
 
 @bot.command(name='test')
 async def test_command(ctx):
