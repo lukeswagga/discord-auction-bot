@@ -103,6 +103,7 @@ BRAND_CHANNEL_MAP = {
     "Gosha Rubchinskiy": "gosha-rubchinskiy",
     "Helmut Lang": "helmut-lang",
     "Hood By Air": "hood-by-air",
+    "Miu Miu": "miu-miu",
     "Hysteric Glamour": "hysteric-glamour",
     "Junya Watanabe": "junya-watanabe",
     "Kiko Kostadinov": "kiko-kostadinov",
