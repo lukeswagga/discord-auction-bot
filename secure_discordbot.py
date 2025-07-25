@@ -64,9 +64,8 @@ except Exception as e:
 AUCTION_CATEGORY_NAME = "🎯 AUCTION SNIPES"
 AUCTION_CHANNEL_NAME = "🎯-auction-alerts"
 
-BOOKMARK_METHOD = "private_channel"  # Options: "dm", "private_channel"
 BOOKMARK_CATEGORY_NAME = "📚 BOOKMARKS"
-user_bookmark_channels = {}  # Cache for user bookmark channels
+user_bookmark_channels = {}
 
 batch_buffer = []
 BATCH_SIZE = 4
@@ -850,6 +849,151 @@ async def handle_bookmark_reaction(reaction, user):
             
         except Exception as e:
             print(f"❌ Error removing bookmark: {e}")
+
+@bot.command(name='test_bookmark')
+async def test_bookmark_command(ctx):
+    """Test if bookmark commands are working"""
+    await ctx.send("✅ Bookmark system is loading!")
+
+@bot.command(name='check_tables')
+async def check_tables_command(ctx):
+    """Check what database tables exist"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        
+        # Check if user_bookmarks table exists
+        if 'user_bookmarks' not in tables:
+            await ctx.send("❌ user_bookmarks table missing - need to update database")
+        else:
+            cursor.execute("SELECT COUNT(*) FROM user_bookmarks")
+            count = cursor.fetchone()[0]
+            await ctx.send(f"✅ user_bookmarks table exists with {count} bookmarks")
+        
+        # Check if user_preferences has bookmark columns
+        cursor.execute("PRAGMA table_info(user_preferences)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        missing_cols = []
+        if 'bookmark_method' not in columns:
+            missing_cols.append('bookmark_method')
+        if 'auto_bookmark_likes' not in columns:
+            missing_cols.append('auto_bookmark_likes')
+        
+        if missing_cols:
+            await ctx.send(f"❌ Missing columns: {', '.join(missing_cols)}")
+        else:
+            await ctx.send("✅ user_preferences table has bookmark columns")
+        
+        conn.close()
+        
+    except Exception as e:
+        await ctx.send(f"❌ Database error: {e}")
+
+
+@bot.command(name='add_bookmark_tables')
+async def add_bookmark_tables_command(ctx):
+    """Add missing bookmark tables and columns"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # Create user_bookmarks table if it doesn't exist
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                auction_id TEXT,
+                bookmark_message_id INTEGER,
+                bookmark_channel_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (auction_id) REFERENCES listings (auction_id),
+                UNIQUE(user_id, auction_id)
+            )
+        ''')
+        
+        # Add bookmark columns to user_preferences if they don't exist
+        try:
+            cursor.execute('ALTER TABLE user_preferences ADD COLUMN bookmark_method TEXT DEFAULT "private_channel"')
+            await ctx.send("✅ Added bookmark_method column")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e):
+                await ctx.send("✅ bookmark_method column already exists")
+            else:
+                await ctx.send(f"❌ Error adding bookmark_method: {e}")
+        
+        try:
+            cursor.execute('ALTER TABLE user_preferences ADD COLUMN auto_bookmark_likes BOOLEAN DEFAULT TRUE')
+            await ctx.send("✅ Added auto_bookmark_likes column")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e):
+                await ctx.send("✅ auto_bookmark_likes column already exists")
+            else:
+                await ctx.send(f"❌ Error adding auto_bookmark_likes: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        await ctx.send("✅ Database updated for bookmarks!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error updating database: {e}")
+
+
+@bot.command(name='bookmark_settings')
+async def bookmark_settings_command(ctx):
+    """Configure bookmark preferences"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT bookmark_method, auto_bookmark_likes FROM user_preferences WHERE user_id = ?', 
+                       (ctx.author.id,))
+        prefs = cursor.fetchone()
+        
+        if not prefs:
+            await ctx.send("❌ Please run `!setup` first!")
+            conn.close()
+            return
+        
+        bookmark_method = prefs[0] if prefs[0] else "private_channel"
+        auto_bookmark = prefs[1] if prefs[1] is not None else True
+        
+        embed = discord.Embed(
+            title="📚 Bookmark Settings",
+            description="Configure how your liked items are bookmarked",
+            color=0x0099ff
+        )
+        
+        embed.add_field(
+            name="📍 Current Method",
+            value=f"{'🔒 Private Channel' if bookmark_method == 'private_channel' else '📨 Direct Message'}",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="🤖 Auto-Bookmark Likes",
+            value=f"{'✅ Enabled' if auto_bookmark else '❌ Disabled'}",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📋 Next Steps",
+            value="Run `!add_bookmark_tables` if you see errors\nThen try `!test_bookmark` to test",
+            inline=False
+        )
+        
+        conn.close()
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 @bot.command(name='test_reaction')
 async def test_reaction_command(ctx):
