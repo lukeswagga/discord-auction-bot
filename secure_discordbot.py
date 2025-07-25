@@ -1702,11 +1702,6 @@ async def on_reaction_add(reaction, user):
         print(f"❌ No listing found for auction ID: {auction_id}")
     
     conn.close()
-        
-       try:
-        some_code()
-    except Exception as e:  # ← Correct indentation
-        print("Error")
 
 # Also debug the add_reaction function
 def add_reaction(user_id, auction_id, reaction_type):
