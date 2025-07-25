@@ -844,11 +844,14 @@ async def on_reaction_add(reaction, user):
         await dm_channel.send(embed=embed)
         return
     
-    if not (reaction.message.channel.name == AUCTION_CHANNEL_NAME or 
-            reaction.message.channel.name.startswith("🏷️-")):
+    # Fixed channel checking logic
+    channel_name = reaction.message.channel.name
+    if not (channel_name == "🎯-auction-alerts" or channel_name.startswith("🏷️-")):
+        print(f"🚫 Reaction ignored - wrong channel: {channel_name}")
         return
     
     if not reaction.message.embeds:
+        print("🚫 Reaction ignored - no embeds")
         return
     
     embed = reaction.message.embeds[0]
@@ -856,10 +859,13 @@ async def on_reaction_add(reaction, user):
     
     auction_id_match = re.search(r'ID: (\w+)', footer_text)
     if not auction_id_match:
+        print("🚫 Reaction ignored - no auction ID found")
         return
     
     auction_id = auction_id_match.group(1)
     reaction_type = "thumbs_up" if str(reaction.emoji) == "👍" else "thumbs_down"
+    
+    print(f"👆 Processing {reaction_type} from {user.name} on auction {auction_id}")
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -886,14 +892,19 @@ async def on_reaction_add(reaction, user):
         if preference_learner:
             preference_learner.learn_from_reaction(user.id, auction_data, reaction_type)
         
-        add_reaction(user.id, auction_id, reaction_type)
+        success = add_reaction(user.id, auction_id, reaction_type)
         
-        if reaction_type == "thumbs_up":
-            await reaction.message.add_reaction("✅")
+        if success:
+            if reaction_type == "thumbs_up":
+                await reaction.message.add_reaction("✅")
+            else:
+                await reaction.message.add_reaction("❌")
+            
+            print(f"✅ Learned from {user.name}'s {reaction_type} on {brand} item: {title[:30]}...")
         else:
-            await reaction.message.add_reaction("❌")
-        
-        print(f"✅ Learned from {user.name}'s {reaction_type} on {brand} item")
+            print(f"❌ Failed to save reaction from {user.name}")
+    else:
+        print(f"❌ No listing found for auction ID: {auction_id}")
     
     conn.close()
 
@@ -981,6 +992,13 @@ async def stats_command(ctx):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # Debug: Check if reactions table exists and has data
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='reactions'")
+    reactions_table_exists = cursor.fetchone() is not None
+    
+    cursor.execute("SELECT COUNT(*) FROM reactions")
+    total_reactions_all = cursor.fetchone()[0]
+    
     cursor.execute('''
         SELECT 
             COUNT(*) as total,
@@ -993,6 +1011,16 @@ async def stats_command(ctx):
     stats = cursor.fetchone()
     total, thumbs_up, thumbs_down = stats[0], stats[1] or 0, stats[2] or 0
     
+    # Debug: Get recent reactions for this user
+    cursor.execute('''
+        SELECT auction_id, reaction_type, created_at 
+        FROM reactions 
+        WHERE user_id = ? 
+        ORDER BY created_at DESC 
+        LIMIT 5
+    ''', (ctx.author.id,))
+    recent_reactions = cursor.fetchall()
+    
     cursor.execute('''
         SELECT brand, preference_score FROM user_brand_preferences 
         WHERE user_id = ? ORDER BY preference_score DESC LIMIT 3
@@ -1002,6 +1030,17 @@ async def stats_command(ctx):
     embed = discord.Embed(
         title=f"📊 Stats for {ctx.author.display_name}",
         color=0x0099ff
+    )
+    
+    # Debug info
+    debug_info = f"Reactions table exists: {reactions_table_exists}\n"
+    debug_info += f"Total reactions (all users): {total_reactions_all}\n"
+    debug_info += f"Your user ID: {ctx.author.id}"
+    
+    embed.add_field(
+        name="🔧 Debug Info",
+        value=debug_info,
+        inline=False
     )
     
     embed.add_field(
@@ -1016,6 +1055,14 @@ async def stats_command(ctx):
             name="🎯 Positivity Rate",
             value=f"{positivity:.1f}%",
             inline=True
+        )
+    
+    if recent_reactions:
+        recent_text = "\n".join([f"{auction_id}: {reaction_type} ({created_at})" for auction_id, reaction_type, created_at in recent_reactions])
+        embed.add_field(
+            name="🕒 Recent Reactions",
+            value=recent_text[:1024],
+            inline=False
         )
     
     if top_brands:
