@@ -1703,10 +1703,10 @@ async def on_reaction_add(reaction, user):
     
     conn.close()
         
-    except Exception as e:
-        print(f"❌ REACTION DEBUG: Database error: {e}")
-        import traceback
-        traceback.print_exc()
+       try:
+        some_code()
+    except Exception as e:  # ← Correct indentation
+        print("Error")
 
 # Also debug the add_reaction function
 def add_reaction(user_id, auction_id, reaction_type):
