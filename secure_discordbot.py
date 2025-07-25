@@ -414,12 +414,64 @@ preference_learner = None
 
 def init_database():
     global preference_learner
+    
+    print("🔧 Initializing database...")
+    
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # ... your existing table creation code ...
+    # Create listings table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS listings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            auction_id TEXT UNIQUE,
+            title TEXT,
+            brand TEXT,
+            price_jpy INTEGER,
+            price_usd REAL,
+            seller_id TEXT,
+            zenmarket_url TEXT,
+            yahoo_url TEXT,
+            image_url TEXT,
+            deal_quality REAL DEFAULT 0.5,
+            priority_score REAL DEFAULT 0.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            message_id INTEGER
+        )
+    ''')
+    print("✅ Created listings table")
     
-    # ADD THIS NEW CODE AT THE END:
+    # Create reactions table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS reactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            auction_id TEXT,
+            reaction_type TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (auction_id) REFERENCES listings (auction_id)
+        )
+    ''')
+    print("✅ Created reactions table")
+    
+    # Create user_preferences table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            user_id INTEGER PRIMARY KEY,
+            proxy_service TEXT DEFAULT 'zenmarket',
+            setup_complete BOOLEAN DEFAULT FALSE,
+            notifications_enabled BOOLEAN DEFAULT TRUE,
+            min_quality_threshold REAL DEFAULT 0.3,
+            max_price_alert REAL DEFAULT 1000.0,
+            bookmark_method TEXT DEFAULT 'private_channel',
+            auto_bookmark_likes BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    print("✅ Created user_preferences table")
+    
+    # Create user_bookmarks table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_bookmarks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -432,23 +484,90 @@ def init_database():
             UNIQUE(user_id, auction_id)
         )
     ''')
+    print("✅ Created user_bookmarks table")
     
-    # Try to add new columns (will fail silently if they already exist)
-    try:
-        cursor.execute('ALTER TABLE user_preferences ADD COLUMN bookmark_method TEXT DEFAULT "private_channel"')
-    except sqlite3.OperationalError:
-        pass  # Column already exists
+    # Create scraper_stats table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scraper_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            total_found INTEGER DEFAULT 0,
+            quality_filtered INTEGER DEFAULT 0,
+            sent_to_discord INTEGER DEFAULT 0,
+            errors_count INTEGER DEFAULT 0,
+            keywords_searched INTEGER DEFAULT 0
+        )
+    ''')
+    print("✅ Created scraper_stats table")
     
+    # Create preference learning tables
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_seller_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            seller_id TEXT,
+            likes INTEGER DEFAULT 0,
+            dislikes INTEGER DEFAULT 0,
+            trust_score REAL DEFAULT 0.5,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, seller_id)
+        )
+    ''')
+    print("✅ Created user_seller_preferences table")
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_brand_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            brand TEXT,
+            likes INTEGER DEFAULT 0,
+            dislikes INTEGER DEFAULT 0,
+            preference_score REAL DEFAULT 0.5,
+            avg_liked_price REAL DEFAULT 0,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, brand)
+        )
+    ''')
+    print("✅ Created user_brand_preferences table")
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_item_preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            item_category TEXT,
+            size_preference TEXT,
+            max_price_usd REAL,
+            min_quality_score REAL DEFAULT 0.3,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id)
+        )
+    ''')
+    print("✅ Created user_item_preferences table")
+    
+    # Check if we need to add new columns to existing tables
     try:
-        cursor.execute('ALTER TABLE user_preferences ADD COLUMN auto_bookmark_likes BOOLEAN DEFAULT TRUE')
-    except sqlite3.OperationalError:
-        pass  # Column already exists
+        cursor.execute("PRAGMA table_info(user_preferences)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'bookmark_method' not in columns:
+            cursor.execute('ALTER TABLE user_preferences ADD COLUMN bookmark_method TEXT DEFAULT "private_channel"')
+            print("✅ Added bookmark_method column")
+        
+        if 'auto_bookmark_likes' not in columns:
+            cursor.execute('ALTER TABLE user_preferences ADD COLUMN auto_bookmark_likes BOOLEAN DEFAULT TRUE')
+            print("✅ Added auto_bookmark_likes column")
+            
+    except Exception as e:
+        print(f"⚠️ Column addition warning: {e}")
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized with enhanced schema")
+    print("✅ Database initialization complete")
     
+    # Initialize preference learner
     preference_learner = UserPreferenceLearner(DB_FILE)
+    print("✅ Preference learner initialized")
+
 
 def add_listing(auction_data, message_id):
     conn = sqlite3.connect(DB_FILE)
