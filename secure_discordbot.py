@@ -519,29 +519,33 @@ def add_listing(auction_data, message_id):
     finally:
         conn.close()
 
-def add_reaction(user_id, auction_id, reaction_type):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
+@bot.command(name='test_reaction')
+async def test_reaction_command(ctx):
+    """Test command to manually insert a reaction"""
     try:
-        cursor.execute('''
-            DELETE FROM reactions 
-            WHERE user_id = ? AND auction_id = ?
-        ''', (user_id, auction_id))
+        # Insert a test reaction
+        success = add_reaction(ctx.author.id, "test123", "thumbs_up")
         
-        cursor.execute('''
-            INSERT INTO reactions (user_id, auction_id, reaction_type)
-            VALUES (?, ?, ?)
-        ''', (user_id, auction_id, reaction_type))
-        
-        conn.commit()
-        return True
-        
+        if success:
+            await ctx.send("✅ Test reaction inserted successfully!")
+            
+            # Check if it's there
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM reactions WHERE user_id = ?', (ctx.author.id,))
+            reactions = cursor.fetchall()
+            conn.close()
+            
+            await ctx.send(f"Your reactions in DB: {len(reactions)}")
+            for reaction in reactions:
+                await ctx.send(f"ID: {reaction[0]}, User: {reaction[1]}, Auction: {reaction[2]}, Type: {reaction[3]}, Time: {reaction[4]}")
+        else:
+            await ctx.send("❌ Failed to insert test reaction")
+            
     except Exception as e:
-        print(f"❌ Error adding reaction: {e}")
-        return False
-    finally:
-        conn.close()
+        await ctx.send(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 def get_user_proxy_preference(user_id):
     conn = sqlite3.connect(DB_FILE)
@@ -821,20 +825,32 @@ async def on_ready():
 
 @bot.event
 async def on_reaction_add(reaction, user):
+    print(f"🔍 REACTION DEBUG: Reaction detected from {user.name} ({user.id})")
+    print(f"🔍 REACTION DEBUG: Emoji: {reaction.emoji}")
+    print(f"🔍 REACTION DEBUG: Channel: {reaction.message.channel.name}")
+    print(f"🔍 REACTION DEBUG: Is bot: {user.bot}")
+    
     if user.bot:
+        print("🚫 REACTION DEBUG: Ignoring bot reaction")
         return
     
     if reaction.message.embeds and len(reaction.message.embeds) > 0:
         embed = reaction.message.embeds[0]
         if embed.title and "Setup" in embed.title:
+            print("🔍 REACTION DEBUG: Setup reaction detected")
             await handle_setup_reaction(reaction, user)
             return
     
+    print(f"🔍 REACTION DEBUG: Emoji check - is thumbs: {str(reaction.emoji) in ['👍', '👎']}")
     if str(reaction.emoji) not in ["👍", "👎"]:
+        print("🚫 REACTION DEBUG: Not a thumbs up/down emoji")
         return
     
     proxy_service, setup_complete = get_user_proxy_preference(user.id)
+    print(f"🔍 REACTION DEBUG: User setup complete: {setup_complete}")
+    
     if not setup_complete:
+        print("🚫 REACTION DEBUG: User hasn't completed setup")
         embed = discord.Embed(
             title="⚠️ Setup Required",
             description="Please complete your setup first using `!setup`!",
@@ -844,69 +860,202 @@ async def on_reaction_add(reaction, user):
         await dm_channel.send(embed=embed)
         return
     
-    # Fixed channel checking logic
     channel_name = reaction.message.channel.name
+    print(f"🔍 REACTION DEBUG: Channel name: '{channel_name}'")
+    print(f"🔍 REACTION DEBUG: Channel check: {channel_name == '🎯-auction-alerts' or channel_name.startswith('🏷️-')}")
+    
     if not (channel_name == "🎯-auction-alerts" or channel_name.startswith("🏷️-")):
-        print(f"🚫 Reaction ignored - wrong channel: {channel_name}")
+        print(f"🚫 REACTION DEBUG: Wrong channel - expected '🎯-auction-alerts' or starting with '🏷️-'")
         return
     
+    print(f"🔍 REACTION DEBUG: Message has embeds: {bool(reaction.message.embeds)}")
     if not reaction.message.embeds:
-        print("🚫 Reaction ignored - no embeds")
+        print("🚫 REACTION DEBUG: No embeds in message")
         return
     
     embed = reaction.message.embeds[0]
     footer_text = embed.footer.text if embed.footer else ""
+    print(f"🔍 REACTION DEBUG: Footer text: '{footer_text}'")
     
     auction_id_match = re.search(r'ID: (\w+)', footer_text)
+    print(f"🔍 REACTION DEBUG: Auction ID match: {auction_id_match}")
+    
     if not auction_id_match:
-        print("🚫 Reaction ignored - no auction ID found")
+        print("🚫 REACTION DEBUG: No auction ID found in footer")
         return
     
     auction_id = auction_id_match.group(1)
     reaction_type = "thumbs_up" if str(reaction.emoji) == "👍" else "thumbs_down"
     
-    print(f"👆 Processing {reaction_type} from {user.name} on auction {auction_id}")
+    print(f"✅ REACTION DEBUG: Processing {reaction_type} from {user.name} on auction {auction_id}")
+    
+    # Test database connection
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        print("✅ REACTION DEBUG: Database connection successful")
+        
+        # Check if listings table exists and has the auction
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='listings'")
+        listings_exists = cursor.fetchone() is not None
+        print(f"🔍 REACTION DEBUG: Listings table exists: {listings_exists}")
+        
+        cursor.execute('SELECT COUNT(*) FROM listings WHERE auction_id = ?', (auction_id,))
+        listing_count = cursor.fetchone()[0]
+        print(f"🔍 REACTION DEBUG: Listings found for auction {auction_id}: {listing_count}")
+        
+        cursor.execute('''
+            SELECT title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality
+            FROM listings WHERE auction_id = ?
+        ''', (auction_id,))
+        result = cursor.fetchone()
+        
+        if result:
+            title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality = result
+            print(f"✅ REACTION DEBUG: Found listing: {title[:30]}...")
+            
+            auction_data = {
+                'auction_id': auction_id,
+                'title': title,
+                'brand': brand,
+                'price_jpy': price_jpy,
+                'price_usd': price_usd,
+                'seller_id': seller_id,
+                'deal_quality': deal_quality
+            }
+            
+            # Test preference learner
+            if preference_learner:
+                print("✅ REACTION DEBUG: Preference learner exists, calling learn_from_reaction")
+                preference_learner.learn_from_reaction(user.id, auction_data, reaction_type)
+            else:
+                print("❌ REACTION DEBUG: No preference learner found")
+            
+            # Test add_reaction function
+            print("🔍 REACTION DEBUG: Calling add_reaction function")
+            success = add_reaction(user.id, auction_id, reaction_type)
+            print(f"🔍 REACTION DEBUG: add_reaction returned: {success}")
+            
+            if success:
+                if reaction_type == "thumbs_up":
+                    await reaction.message.add_reaction("✅")
+                else:
+                    await reaction.message.add_reaction("❌")
+                
+                print(f"✅ REACTION DEBUG: Successfully processed {reaction_type} from {user.name}")
+                
+                # Verify the reaction was saved
+                cursor.execute('SELECT COUNT(*) FROM reactions WHERE user_id = ? AND auction_id = ?', (user.id, auction_id))
+                saved_count = cursor.fetchone()[0]
+                print(f"🔍 REACTION DEBUG: Reactions in DB for this user/auction: {saved_count}")
+                
+            else:
+                print(f"❌ REACTION DEBUG: Failed to save reaction")
+        else:
+            print(f"❌ REACTION DEBUG: No listing found for auction ID: {auction_id}")
+            # Let's see what auction IDs we do have
+            cursor.execute('SELECT auction_id FROM listings LIMIT 5')
+            sample_ids = cursor.fetchall()
+            print(f"🔍 REACTION DEBUG: Sample auction IDs in DB: {[row[0] for row in sample_ids]}")
+        
+        conn.close()
+        
+    except Exception as e:
+        print(f"❌ REACTION DEBUG: Database error: {e}")
+        import traceback
+        traceback.print_exc()
+
+# Also debug the add_reaction function
+def add_reaction(user_id, auction_id, reaction_type):
+    print(f"🔍 ADD_REACTION DEBUG: Called with user_id={user_id}, auction_id={auction_id}, reaction_type={reaction_type}")
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    cursor.execute('''
-        SELECT title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality
-        FROM listings WHERE auction_id = ?
-    ''', (auction_id,))
-    result = cursor.fetchone()
+    try:
+        # Check if reactions table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='reactions'")
+        table_exists = cursor.fetchone() is not None
+        print(f"🔍 ADD_REACTION DEBUG: Reactions table exists: {table_exists}")
+        
+        if not table_exists:
+            print("❌ ADD_REACTION DEBUG: Reactions table doesn't exist!")
+            return False
+        
+        # Delete existing reaction from this user for this auction
+        cursor.execute('DELETE FROM reactions WHERE user_id = ? AND auction_id = ?', (user_id, auction_id))
+        deleted_count = cursor.rowcount
+        print(f"🔍 ADD_REACTION DEBUG: Deleted {deleted_count} existing reactions")
+        
+        # Insert new reaction
+        cursor.execute('''
+            INSERT INTO reactions (user_id, auction_id, reaction_type)
+            VALUES (?, ?, ?)
+        ''', (user_id, auction_id, reaction_type))
+        
+        conn.commit()
+        print(f"✅ ADD_REACTION DEBUG: Successfully inserted reaction")
+        
+        # Verify insertion
+        cursor.execute('SELECT COUNT(*) FROM reactions WHERE user_id = ? AND auction_id = ?', (user_id, auction_id))
+        count = cursor.fetchone()[0]
+        print(f"🔍 ADD_REACTION DEBUG: Verification - reactions in DB: {count}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ ADD_REACTION DEBUG: Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        conn.close()
+
+# Debug stats command
+@bot.command(name='debug_db')
+async def debug_db_command(ctx):
+    """Debug command to check database state"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
     
-    if result:
-        title, brand, price_jpy, price_usd, seller_id, yahoo_url, deal_quality = result
+    # Check tables
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = [row[0] for row in cursor.fetchall()]
+    
+    # Check reactions table structure if it exists
+    reactions_info = "Table doesn't exist"
+    if 'reactions' in tables:
+        cursor.execute("PRAGMA table_info(reactions)")
+        columns = cursor.fetchall()
+        reactions_info = f"Columns: {[col[1] for col in columns]}"
         
-        auction_data = {
-            'auction_id': auction_id,
-            'title': title,
-            'brand': brand,
-            'price_jpy': price_jpy,
-            'price_usd': price_usd,
-            'seller_id': seller_id,
-            'deal_quality': deal_quality
-        }
+        cursor.execute("SELECT COUNT(*) FROM reactions")
+        total_reactions = cursor.fetchone()[0]
+        reactions_info += f"\nTotal reactions: {total_reactions}"
         
-        if preference_learner:
-            preference_learner.learn_from_reaction(user.id, auction_data, reaction_type)
+        cursor.execute("SELECT user_id, COUNT(*) FROM reactions GROUP BY user_id")
+        user_counts = cursor.fetchall()
+        reactions_info += f"\nReactions by user: {dict(user_counts)}"
+    
+    # Check listings
+    listings_info = "Table doesn't exist"
+    if 'listings' in tables:
+        cursor.execute("SELECT COUNT(*) FROM listings")
+        total_listings = cursor.fetchone()[0]
+        listings_info = f"Total listings: {total_listings}"
         
-        success = add_reaction(user.id, auction_id, reaction_type)
-        
-        if success:
-            if reaction_type == "thumbs_up":
-                await reaction.message.add_reaction("✅")
-            else:
-                await reaction.message.add_reaction("❌")
-            
-            print(f"✅ Learned from {user.name}'s {reaction_type} on {brand} item: {title[:30]}...")
-        else:
-            print(f"❌ Failed to save reaction from {user.name}")
-    else:
-        print(f"❌ No listing found for auction ID: {auction_id}")
+        cursor.execute("SELECT auction_id FROM listings LIMIT 3")
+        sample_ids = [row[0] for row in cursor.fetchall()]
+        listings_info += f"\nSample IDs: {sample_ids}"
+    
+    embed = discord.Embed(title="🔧 Database Debug Info", color=0xff9900)
+    embed.add_field(name="Tables", value=str(tables), inline=False)
+    embed.add_field(name="Reactions Table", value=reactions_info, inline=False)
+    embed.add_field(name="Listings Table", value=listings_info, inline=False)
+    embed.add_field(name="Your User ID", value=str(ctx.author.id), inline=False)
     
     conn.close()
+    await ctx.send(embed=embed)
 
 async def handle_setup_reaction(reaction, user):
     emoji = str(reaction.emoji)
