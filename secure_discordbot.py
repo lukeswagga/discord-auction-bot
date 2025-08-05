@@ -1134,6 +1134,7 @@ async def db_debug_command(ctx):
         await ctx.send(f"Database error: {e}")
 
 @bot.command(name='clear_recent_listings')
+@commands.has_permissions(administrator=True)
 async def clear_recent_listings_command(ctx):
     """Clear listings from today to fix duplicate detection"""
     try:
@@ -1184,6 +1185,7 @@ async def clear_recent_listings_command(ctx):
         await ctx.send(f"❌ Error clearing recent listings: {e}")
 
 @bot.command(name='force_clear_all')
+@commands.has_permissions(administrator=True)
 async def force_clear_all_command(ctx):
     """Emergency command to clear ALL listings"""
     try:
