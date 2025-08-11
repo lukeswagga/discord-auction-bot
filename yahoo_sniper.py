@@ -28,9 +28,19 @@ def health():
 def root():
     return {"service": "Yahoo Auction Scraper", "status": "running"}, 200
 
+SCRAPER_HEALTH_PORT = int(os.getenv("SCRAPER_HEALTH_PORT") or os.getenv("PORT", 8000))
+health_thread = None
+
 def run_health_server():
-    port = int(os.environ.get('PORT', 8000))
-    scraper_app.run(host='0.0.0.0', port=port, debug=False)
+    scraper_app.run(host="0.0.0.0", port=SCRAPER_HEALTH_PORT, debug=False)
+
+def start_health_server():
+    global health_thread
+    if health_thread and health_thread.is_alive():
+        return
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    print(f"🌐 Health server started on port {SCRAPER_HEALTH_PORT}")
 
 DISCORD_BOT_WEBHOOK = os.getenv('DISCORD_BOT_WEBHOOK', "http://localhost:8000/webhook")
 DISCORD_BOT_HEALTH = os.getenv('DISCORD_BOT_HEALTH', "http://localhost:8000/health") 
@@ -1038,8 +1048,7 @@ async def fetch_recent_listings(session, brand, variants):
     return results
 
 async def just_listed_loop():
-    thread = threading.Thread(target=run_health_server, daemon=True)
-    thread.start()
+    start_health_server()
     get_usd_jpy_rate()
     while True:
         async with aiohttp.ClientSession() as session:
@@ -1058,11 +1067,9 @@ async def just_listed_loop():
 
 def main_loop():
     print("🎯 Starting INTENSIVE Yahoo Japan Sniper with MAXIMUM VOLUME...")
-    
-    health_thread = threading.Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-    print(f"🌐 Health server started on port {os.environ.get('PORT', 8000)}")
-    
+
+    start_health_server()
+
     tiered_system = AdaptiveTieredSystem()
     keyword_manager = AdaptiveKeywordManager()
     keyword_generator = IntensiveKeywordGenerator()
